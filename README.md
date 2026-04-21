@@ -1,54 +1,54 @@
 # Twitter Behavioral Analysis
 
-Türkçe Twitter/X kullanıcılarının davranışsal analizi ve troll hesap tespiti üzerine kapsamlı bir araştırma projesidir. Hesapları ikili olarak (**Troll General** / **Not Troll**) sınıflandırmak için metin, görsel ve profil bazlı öznitelikleri bir arada kullanır.
+A research project on the behavioral analysis of Turkish Twitter/X users, focused on **troll account detection**. The pipeline combines textual, visual, and profile-level features to classify accounts as **Troll General** or **Not Troll**.
 
 ---
 
-## Genel Bakış
+## Overview
 
-Proje, aynı kullanıcı setini birden fazla öznitelik uzayında temsil eder ve bu temsilleri hem denetimli hem de denetimsiz öğrenme algoritmalarıyla karşılaştırır:
+The project represents the same user set across multiple feature spaces and compares these representations using both supervised and unsupervised learning:
 
-- **Kullanıcı seviyesinde döküman oluşturma**: Her hesabın tüm tweet'leri; orijinal, retweet ve cevap olarak ayrıştırılarak üç ayrı döküman halinde toplanır.
-- **Türkçeye özel metin ön işleme**: URL temizliği, emoji çevirisi, Türkçe stop word çıkarımı (NLTK + özel liste), noktalama/aksan normalizasyonu.
-- **Çoklu temsil**: BERT gömmeleri, TF-IDF vektörleri, LDA topic dağılımları, reply sentiment skorları, profil fotoğrafı/banner görsel öznitelikleri ve ek hesap metadatası aynı anda değerlendirilir.
-- **Bol modelli karşılaştırma**: Tek bir pipeline üzerinde sınıflandırma ve kümeleme algoritmalarının paralel karşılaştırması.
+- **User-level document construction**: every account's tweets are aggregated into three separate documents — originals, retweets, and replies.
+- **Turkish-specific text preprocessing**: URL stripping, emoji translation, Turkish stop-word removal (NLTK + custom list), punctuation and diacritic normalization.
+- **Multiple representations**: BERT embeddings, TF-IDF vectors, LDA topic distributions, reply sentiment scores, profile picture / banner visual features, and extra account metadata are evaluated in parallel.
+- **Broad model comparison**: classification and clustering algorithms are benchmarked side-by-side on a shared pipeline.
 
 ---
 
-## Veri Seti
+## Dataset
 
-Pipeline iki kaynaktan beslenir:
+The pipeline is driven by two sources:
 
-| Dosya | İçerik |
+| File | Content |
 |---|---|
-| `l_list_tweets.csv` / `l_list_accounts.csv` | "L-list" hesapları ve tweet'leri |
-| `random_users_tweets.csv` / `random_users_accounts.csv` | Rastgele örneklenmiş kullanıcılar |
-| `all_users_annotations.csv` | Manuel etiketler (`Troll General` / `Not Troll`) — `Bot` ve `Troll Boğaziçi` etiketleri `Troll General` altında birleştirilir |
-| `users_extra_features.json` | Hesap bazlı ek sayısal öznitelikler |
-| `pp_features.json` / `banner_features.json` | Profil fotoğrafı ve banner görsel gömmeleri |
-| `turkish-stop_words.txt` | Türkçeye özel stop word listesi |
+| `l_list_tweets.csv` / `l_list_accounts.csv` | "L-list" accounts and their tweets |
+| `random_users_tweets.csv` / `random_users_accounts.csv` | Randomly sampled users |
+| `all_users_annotations.csv` | Manual labels (`Troll General` / `Not Troll`) — `Bot` and `Troll Boğaziçi` labels are merged into `Troll General` |
+| `users_extra_features.json` | Per-account numerical side features |
+| `pp_features.json` / `banner_features.json` | Profile picture and banner visual embeddings |
+| `turkish-stop_words.txt` | Custom Turkish stop-word list |
 
-Etiketli veri %80 / %10 / %10 oranlarıyla train / validation / test olarak rastgele bölünür ve `train_labels_encoded.json`, `val_labels_encoded.json`, `test_labels_encoded.json` olarak diske yazılır.
+Labeled data is randomly split into train / validation / test at an **80 / 10 / 10** ratio and persisted as `train_labels_encoded.json`, `val_labels_encoded.json`, and `test_labels_encoded.json`.
 
 ---
 
 ## Pipeline
 
-### 1. Metin Ön İşleme
+### 1. Text Preprocessing
 
-Üç farklı yoğunlukta ön işleme fonksiyonu bulunur:
+Three preprocessing functions with varying intensity:
 
-- `pre_process_light` — sadece URL, emoji ve noktalama temizliği
-- `pre_process_heavy` — tam temizlik + RT/mention çıkarımı + stop word çıkarımı + küçük harfe çevirme + `i̇` → `i` normalizasyonu
-- `pre_process_emojized_heavy` — ağır temizliğe ek olarak emojilerin metin karşılığının korunması
+- `pre_process_light` — URL, emoji, and punctuation cleanup only
+- `pre_process_heavy` — full cleanup + RT/mention removal + stop-word removal + lowercasing + `i̇` → `i` normalization
+- `pre_process_emojized_heavy` — heavy cleanup but keeps the textual form of emojis
 
-### 2. BERT Gömmeleri
+### 2. BERT Embeddings
 
 Model: [`dbmdz/distilbert-base-turkish-cased`](https://huggingface.co/dbmdz/distilbert-base-turkish-cased)
 
-Her kullanıcının dökümanı 512 token'lık parçalara bölünür, her parça için pooled output alınır ve ortalaması kullanıcıyı temsil eden 768-boyutlu vektörü verir. Üç farklı dökümanın (orijinal / retweet / reply) gömmeleri birleştirilip **2304 boyutlu** tek bir kullanıcı vektörü oluşturulur.
+Each user's document is split into 512-token chunks; pooled outputs are averaged to produce a 768-dim user vector. The embeddings of the three document types (originals / retweets / replies) are concatenated into a single **2304-dim** user vector.
 
-Bu vektörler üzerinde eğitilen MLP:
+MLP trained on top of these vectors:
 
 ```
 Input(2304) → Dense(512) → Dense(512) → Dropout(0.3)
@@ -58,23 +58,23 @@ Input(2304) → Dense(512) → Dense(512) → Dropout(0.3)
 
 ### 3. Topic Modelling
 
-Gensim LDA (10 topic, 10 pass) tüm kullanıcı dökümanları üzerinde eğitilir. Politik bağlamı baskılamak için `oy, yok, chp, türkiye, türk, kılıçdaroğlu, erdoğan, kemal, allah, seçim, pkk` gibi terimler önceden çıkarılır.
+A Gensim LDA model (10 topics, 10 passes) is trained on all user documents. To dampen political bias, terms such as `oy, yok, chp, türkiye, türk, kılıçdaroğlu, erdoğan, kemal, allah, seçim, pkk` are stripped beforehand.
 
-### 4. Reply Sentiment Analizi
+### 4. Reply Sentiment Analysis
 
 Model: [`savasy/bert-base-turkish-sentiment-cased`](https://huggingface.co/savasy/bert-base-turkish-sentiment-cased)
 
-Sadece reply tipi tweet'ler üzerinde çalıştırılır. Her kullanıcıya [-1, +1] aralığında tek bir sentiment skoru atanır. Troll ve normal kullanıcıların dağılımları histogram ve betimleyici istatistiklerle karşılaştırılır.
+Run over reply-type tweets only. Each user is assigned a single sentiment score in the [-1, +1] range. Troll vs. normal distributions are compared using histograms and descriptive statistics.
 
-### 5. Görsel Öznitelikler
+### 5. Visual Features
 
-Önceden hesaplanmış profil fotoğrafı ve banner gömmeleri birleştirilir; eksik görsel için sıfır-vektörle doldurma yapılır. PCA ile 3 boyuta indirgenip görselleştirilir.
+Pre-computed profile picture and banner embeddings are concatenated; missing images are filled with zero vectors. PCA is applied for 3D visualization.
 
-### 6. TF-IDF + Klasik ML
+### 6. TF-IDF + Classical ML
 
-`TfidfVectorizer(norm='l2')` ile kullanıcı dökümanlarından TF-IDF matrisi çıkarılır. Aynı temsil üzerinde eğitilen ve karşılaştırılan modeller:
+A TF-IDF matrix is extracted from user documents using `TfidfVectorizer(norm='l2')`. Models trained and compared on the same representation:
 
-**Denetimli**
+**Supervised**
 - Naive Bayes
 - KNN
 - SVM
@@ -85,25 +85,25 @@ Sadece reply tipi tweet'ler üzerinde çalıştırılır. Her kullanıcıya [-1,
 - Neural Networks (MLP)
 - Voting Ensemble (SVM + RF + MLP, hard voting)
 
-**Denetimsiz (kümeleme)**
+**Unsupervised (clustering)**
 - DBSCAN
 - Gaussian Mixture Model
 - Agglomerative Clustering
 
-Her model için confusion matrix, precision, recall, F1 ve Adjusted Rand Index raporlanır.
+Confusion matrices, precision, recall, F1, and Adjusted Rand Index are reported for each model.
 
 ---
 
-## Proje Yapısı
+## Project Structure
 
 ```
 twitter-behavioral-analysis/
-├── BERT_ekin.ipynb       # Tüm pipeline — orijinal Colab notebook
-├── bert_ekin.py          # Notebook'un .py dışa aktarımı
+├── BERT_ekin.ipynb       # Full pipeline — original Colab notebook
+├── bert_ekin.py          # .py export of the notebook
 └── README.md
 ```
 
-Notebook aşağıdaki bölümlere ayrılmıştır:
+The notebook is organized into the following sections:
 
 1. Environment Preparation
 2. Data Preparation (File Reading, Data Creation, Text Pre-Processing)
@@ -116,7 +116,7 @@ Notebook aşağıdaki bölümlere ayrılmıştır:
 
 ---
 
-## Bağımlılıklar
+## Dependencies
 
 - Python 3.9+
 - `transformers`, `torch`, `tensorflow`
@@ -124,13 +124,13 @@ Notebook aşağıdaki bölümlere ayrılmıştır:
 - `pandas`, `numpy`, `matplotlib`, `seaborn`
 - `emoji`, `joblib`, `tqdm`
 
-NLTK kaynakları: `stopwords`, `punkt`, `wordnet`.
+NLTK resources: `stopwords`, `punkt`, `wordnet`.
 
 ---
 
-## Çalıştırma
+## Running
 
-Notebook Google Colab'da çalışacak şekilde yazılmıştır ve `/content/drive/MyDrive` altındaki CSV/JSON dosyalarına bağımlıdır. Yerelde çalıştırmak için `HOME_PATH` değişkenini kendi veri dizininizle değiştirmeniz yeterlidir.
+The notebook is authored for Google Colab and expects CSV/JSON files under `/content/drive/MyDrive`. To run locally, point `HOME_PATH` at your own data directory:
 
 ```python
 HOME_PATH = "/path/to/your/data"
@@ -138,8 +138,8 @@ HOME_PATH = "/path/to/your/data"
 
 ---
 
-## Notlar
+## Notes
 
-- Etiket dağılımı dengesizdir; performans karşılaştırmalarında accuracy yerine F1 tercih edilmiştir.
-- Sentiment dağılımı karşılaştırması için troll ve normal kümelerinden 100'er örnek alınıp eşlenir.
-- Görsel öznitelikler pipeline'a opsiyoneldir; veri eksikse pipeline TF-IDF ve BERT vektörleriyle çalışmaya devam eder.
+- The label distribution is imbalanced; F1 is preferred over accuracy for model comparison.
+- For sentiment comparison, 100 samples are drawn from each of the troll and normal groups and paired.
+- Visual features are optional in the pipeline; if image data is missing, the pipeline continues with TF-IDF and BERT vectors alone.
